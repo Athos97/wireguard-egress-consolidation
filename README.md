@@ -16,12 +16,12 @@ A packet's real path crosses the exit site's ISP router **twice**: once inbound 
 
 ```mermaid
 flowchart LR
-    Dev["End device\n(client site)"] --> RouterC["Small router\nclient site"]
-    RouterC --> ISPc["ISP-provided router\nclient site"]
-    ISPc -- "Internet\nWireGuard tunnel" --> ISPs["ISP-provided router\nexit site"]
-    ISPs -- "port-forward" --> RouterS["Small router\nexit site"]
-    RouterS -- "NAT (masquerade)\nback out the same router" --> ISPs
-    ISPs -- "regular internet traffic" --> Target["Streaming service\nsees the exit site's IP"]
+    Dev["End device<br/>(client site)"] --> RouterC["Small router<br/>client site"]
+    RouterC --> ISPc["ISP-provided router<br/>client site"]
+    ISPc -- "Internet<br/>WireGuard tunnel" --> ISPs["ISP-provided router<br/>exit site"]
+    ISPs -- "port-forward" --> RouterS["Small router<br/>exit site"]
+    RouterS -- "NAT (masquerade)<br/>back out the same router" --> ISPs
+    ISPs -- "regular internet traffic" --> Target["Streaming service<br/>sees the exit site's IP"]
 ```
 
 ## Components
@@ -36,6 +36,111 @@ flowchart LR
 - **Guard every `find` before a `get` in RouterOS scripts.** `/ip route get [/ip route find where ...] x` throws and aborts the whole script when the find matches nothing — which is exactly what happens when the uplink is down, i.e. precisely when the maintenance script most needs to run. Same for `:resolve`, which needs a `:do {} on-error={}` wrapper.
 - **Service hardening instead of an inbound firewall.** Each router sits behind the ISP-provided router, which NATs and forwards nothing to it, so its management services are not reachable from the internet to begin with. A "drop everything from the uplink" ruleset therefore defends against an exposure that doesn't exist, while carrying a real risk of locking you out of a device in someone else's home. Disabling the services you don't use (telnet, ftp, www, api) achieves the same practical result with none of that risk. The exception is the exit site, where the VPN port genuinely is forwarded from the internet.
 - **TCP MSS clamping**, a defensive measure so large TCP transfers don't silently stall when some link along the path has a smaller MTU than expected (common with PPPoE or mobile broadband) and path-MTU-discovery ICMP messages are filtered somewhere in between.
+
+## How it works inside
+
+The diagram above shows where packets travel between sites. These show what each
+router actually does with them, and what keeps it all running unattended.
+
+### Client site: the data path
+
+Everything a local device sends is NATed and then leaves through whichever
+default route currently wins. Note that both paths exit through the same
+physical uplink — when the tunnel is up, the traffic is simply encapsulated
+first.
+
+```mermaid
+flowchart TB
+    TV["Local device joins<br/>the router's WiFi or LAN"] --> BR["bridge - 192.168.88.1/24<br/>DHCP server hands out<br/>192.168.88.2-254"]
+    BR --> NAT["srcnat masquerade<br/>192.168.88.0/24"]
+    NAT --> RT{"which default route wins?<br/>lowest distance"}
+    RT -->|"tunnel up - distance 1"| WG["wireguard interface<br/>encapsulates to the exit site"]
+    RT -->|"tunnel down - distance 3<br/>so the DHCP route wins"| DIRECT["plain routing"]
+    WG --> UP["uplink to the ISP router"]
+    DIRECT --> UP
+    UP --> NET(( Internet ))
+```
+
+The failover hinges on three competing default routes and their administrative
+distances. Lowest wins:
+
+| Route | Distance | Meaning |
+|---|---|---|
+| via the tunnel | 1 | set by `CheckWireGuard` while the tunnel answers |
+| from the DHCP client | 2 | the site's own internet, always present |
+| via the tunnel | 3 | set by `CheckWireGuard` when the tunnel stops answering |
+
+So the tunnel is preferred whenever it works, and the site silently falls back
+to its own connection when it doesn't — rather than losing internet altogether.
+That is a deliberate choice, not a kill switch: this design values the site
+staying online over guaranteeing that traffic never leaves by the local ISP.
+
+### Client site: the three automations
+
+```mermaid
+flowchart LR
+    S1["CheckWireGuard<br/>every 30 s"] --> P{"ping the tunnel<br/>gateway 172.16.0.1"}
+    P -->|"answers"| D1["set tunnel default route<br/>distance = 1, preferred"]
+    P -->|"no answer"| D3["set tunnel default route<br/>distance = 3, DHCP route wins"]
+
+    S2["CheckServerIP<br/>every 5 min"] --> R1["resolve the exit site's<br/>DDNS hostname"]
+    R1 --> R2["keep the /32 host route to it<br/>pointed at the right IP and<br/>the current local gateway"]
+
+    S3["CheckWanLink<br/>every 1 min"] --> W{"is the uplink DHCP<br/>client still bound?"}
+    W -->|"yes"| WOK["reset the failure counter"]
+    W -->|"3 failures"| WR["restart the DHCP client"]
+    W -->|"30 failures"| WB["reboot the router"]
+```
+
+Why each one exists:
+
+- **`CheckWireGuard`** is the failover itself. Without it a dropped tunnel means
+  no internet at that site until someone intervenes.
+- **`CheckServerIP`** stops the routing loop from breaking. The route to the exit
+  site's public IP has to go out the local connection, never through the tunnel,
+  and that IP changes because it's behind dynamic DNS.
+- **`CheckWanLink`** is the watchdog. If the uplink loses its address the router
+  has no route, no tunnel and no remote access, and only a physical visit fixes
+  it. This is not hypothetical: it is exactly how one site in the original
+  deployment became unreachable.
+
+All three guard every `find` before the `get` that follows it, and wrap DNS
+resolution in `:do {} on-error={}`. A RouterOS script that skips those guards
+throws and aborts the moment the uplink is down — precisely when you need it.
+
+### Exit site: the data path
+
+```mermaid
+flowchart TB
+    IN["WireGuard UDP 13231<br/>port-forwarded by the ISP router"] --> WG["wireguard interface<br/>172.16.0.1/24<br/>one peer per site"]
+    WG --> FW{"firewall"}
+    FW -->|"destined to this<br/>site's own LAN"| DROP["drop - client sites cannot<br/>reach the household behind<br/>the exit router"]
+    FW -->|"anything else"| NAT["srcnat masquerade<br/>172.16.0.0/24"]
+    NAT --> OUT["back out the same ISP router<br/>with this site's public IP"]
+```
+
+Two details worth keeping in mind. The `drop` rule is what stops a client site,
+which tunnels everything, from reaching the exit operator's own devices. And
+peers here carry **no** `persistent-keepalive`: on the server it makes the router
+retry handshakes forever against peers whose endpoint it doesn't know, which on
+low-power hardware is enough to pin the CPU permanently.
+
+### Exit site: keeping the hostname current
+
+```mermaid
+flowchart LR
+    A["DdnsUpdate<br/>every 30 min"] --> B["read the current public IP"]
+    B --> C{"different from<br/>what DNS says?"}
+    C -->|"yes"| D["push an update to<br/>the DDNS provider"]
+    C -->|"no"| E["do nothing"]
+    F["DdnsUpdateForce<br/>runs daily"] --> G{"is it the 1st<br/>or the 15th?"}
+    G -->|"yes"| D
+    G -->|"no"| E
+```
+
+The first script keeps the hostname pointing at the right address. The second
+exists for a different reason: free DDNS accounts expire a hostname that receives
+no updates, so it is refreshed twice a month whether the address changed or not.
 
 ## Quick start
 
