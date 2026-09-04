@@ -108,6 +108,17 @@ All three guard every `find` before the `get` that follows it, and wrap DNS
 resolution in `:do {} on-error={}`. A RouterOS script that skips those guards
 throws and aborts the moment the uplink is down — precisely when you need it.
 
+None of them takes a concurrency lock, and that is deliberate. An earlier
+version guarded `CheckWireGuard` with a global boolean so two runs could not
+overlap. It deadlocked: a run that set the flag died before clearing it, and
+every subsequent run skipped its work, so the failover sat silently disabled
+for over an hour with nothing but a log line to show for it. That is strictly
+worse than the race it was meant to prevent, which only produced occasional
+errors. The guards already make overlapping runs harmless — two runs would
+just ping and write the same route distance — so the lock bought nothing. If
+you do need one on a scheduled script, give it an expiry; a lock with no way
+to go stale fails closed and stays that way.
+
 ### Exit site: the data path
 
 ```mermaid

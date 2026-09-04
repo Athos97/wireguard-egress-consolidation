@@ -147,25 +147,18 @@ add name=CheckServerIP owner=admin dont-require-permissions=no \
     policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon \
     source={
         :local vpnHost "<SERVER_DDNS_HOSTNAME>";
-        :global checkNexusRunning;
-        :if ([:typeof $checkNexusRunning] = "nothing") do={ :set checkNexusRunning false };
-        :if ($checkNexusRunning = true) do={
-            :log warning "CheckServerIP: previous run still in progress, skipping";
+        :local routeID [/ip route find comment="vpn"];
+        :if ([:len $routeID] = 0) do={
+            :log warning "CheckServerIP: no route with comment=vpn";
         } else={
-            :set checkNexusRunning true;
-            :local routeID [/ip route find comment="vpn"];
-            :if ([:len $routeID] = 0) do={
-                :log warning "CheckServerIP: no route with comment=vpn";
-            } else={
-                :local resolvedIP "";
-                :do { :set resolvedIP [:resolve $vpnHost]; } on-error={ :log warning "CheckServerIP: DNS resolution failed" };
-                :if ([:typeof $resolvedIP] = "ip") do={
-                    :local ipaddress [/ip route get ($routeID->0) dst-address];
-                    :local currentIP [:pick $ipaddress 0 [:find $ipaddress "/"]];
-                    :if ($resolvedIP != $currentIP) do={
-                        /ip route set $routeID dst-address=$resolvedIP;
-                        :log info "CheckServerIP: vpn route dst-address updated to $resolvedIP";
-                    }
+            :local resolvedIP "";
+            :do { :set resolvedIP [:resolve $vpnHost]; } on-error={ :log warning "CheckServerIP: DNS resolution failed" };
+            :if ([:typeof $resolvedIP] = "ip") do={
+                :local ipaddress [/ip route get ($routeID->0) dst-address];
+                :local currentIP [:pick $ipaddress 0 [:find $ipaddress "/"]];
+                :if ($resolvedIP != $currentIP) do={
+                    /ip route set $routeID dst-address=$resolvedIP;
+                    :log info "CheckServerIP: vpn route dst-address updated to $resolvedIP";
                 }
                 :local dhcpRoute [/ip route find where dst-address=0.0.0.0/0 and distance=2];
                 :if ([:len $dhcpRoute] = 0) do={
@@ -179,40 +172,34 @@ add name=CheckServerIP owner=admin dont-require-permissions=no \
                     }
                 }
             }
-            :set checkNexusRunning false;
         }
     }
 
 # CheckWireGuard: adjusts the default route's distance depending on
 # whether the tunnel responds, so the site falls back to its direct
 # connection when the tunnel is down and prefers the tunnel again once
-# it's back. A global lock stops two runs racing when the ping is slow.
+# it's back. Deliberately has no concurrency lock: the find-before-get
+# guard already makes overlapping runs harmless, and a boolean lock with
+# no expiry is worse than the race it prevents - if the run holding it
+# dies, the lock stays set and the failover is silently disabled forever.
 add name=CheckWireGuard owner=admin dont-require-permissions=no \
     policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon \
     source={
         :local routeGW "172.16.0.1";
         :local vpnConnectedDistance 1;
         :local vpnDisconnectedDistance 3;
-        :global checkWgRunning;
-        :if ([:typeof $checkWgRunning] = "nothing") do={ :set checkWgRunning false };
-        :if ($checkWgRunning = true) do={
-            :log warning "CheckWireGuard: previous run still in progress, skipping";
-        } else={
-            :set checkWgRunning true;
-            :local pingResult [/ping $routeGW count=3];
-            :local routeId [/ip route find where gateway=$routeGW];
-            :if ([:len $routeId] > 0) do={
-                :if ($pingResult > 0) do={
-                    /ip route set $routeId distance=$vpnConnectedDistance;
-                    :log info "VPN connected. Route updated with distance $vpnConnectedDistance";
-                } else={
-                    /ip route set $routeId distance=$vpnDisconnectedDistance;
-                    :log info "VPN disconnected. Route updated with distance $vpnDisconnectedDistance";
-                }
+        :local pingResult [/ping $routeGW count=3];
+        :local routeId [/ip route find where gateway=$routeGW];
+        :if ([:len $routeId] > 0) do={
+            :if ($pingResult > 0) do={
+                /ip route set $routeId distance=$vpnConnectedDistance;
+                :log info "VPN connected. Route updated with distance $vpnConnectedDistance";
             } else={
-                :log warning "CheckWireGuard: no route found with gateway $routeGW";
+                /ip route set $routeId distance=$vpnDisconnectedDistance;
+                :log info "VPN disconnected. Route updated with distance $vpnDisconnectedDistance";
             }
-            :set checkWgRunning false;
+        } else={
+            :log warning "CheckWireGuard: no route found with gateway $routeGW";
         }
     }
 
