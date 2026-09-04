@@ -95,11 +95,13 @@ add chain=forward protocol=tcp tcp-flags=syn action=change-mss \
     new-mss=clamp-to-pmtu passthrough=yes comment="MSS clamp WG"
 
 /ip service
-# Leave only ssh and winbox. telnet and ftp are cleartext and have no
-# business here; www and api are unused.
+# telnet and ftp are cleartext; the API isn't used here. Keep ssh and
+# winbox, and decide about www deliberately: that one is WebFig, the
+# router's web interface. Disabling it is fine only if you never
+# administer the box from a browser - it is an easy thing to turn off
+# by accident and then wonder why the web UI stopped answering.
 set telnet disabled=yes
 set ftp disabled=yes
-set www disabled=yes
 set api disabled=yes
 set api-ssl disabled=yes
 

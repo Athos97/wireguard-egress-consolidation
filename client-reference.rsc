@@ -98,9 +98,11 @@ add chain=forward protocol=tcp tcp-flags=syn action=change-mss \
 # device in someone else's house. Disabling the services you don't use
 # (below) gets you the same practical benefit with no such risk.
 /ip service
+# telnet and ftp are cleartext; the API isn't used here. www is WebFig,
+# the router's web interface - only disable it if you never administer
+# the box from a browser.
 set telnet disabled=yes
 set ftp disabled=yes
-set www disabled=yes
 set api disabled=yes
 set api-ssl disabled=yes
 
