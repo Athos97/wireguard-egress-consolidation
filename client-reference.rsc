@@ -78,7 +78,7 @@ add listen-port=13231 mtu=1420 name=wireguard
 # expires and the tunnel keeps dropping and reconnecting. Do not set it
 # on the server side - there it only produces futile handshake retries.
 /interface wireguard peers
-add allowed-address=0.0.0.0/0 endpoint-address=<SERVER_DDNS_HOSTNAME> \
+add allowed-address=0.0.0.0/0 name="VPN Server" endpoint-address=<SERVER_DDNS_HOSTNAME> \
     endpoint-port=13231 interface=wireguard persistent-keepalive=25s \
     public-key="<SERVER_PUBLIC_KEY>"
 
