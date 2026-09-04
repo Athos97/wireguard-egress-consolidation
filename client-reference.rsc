@@ -178,7 +178,10 @@ add name=CheckServerIP owner=admin dont-require-permissions=no \
 # CheckWireGuard: adjusts the default route's distance depending on
 # whether the tunnel responds, so the site falls back to its direct
 # connection when the tunnel is down and prefers the tunnel again once
-# it's back. Deliberately has no concurrency lock: the find-before-get
+# it's back. It only writes and logs when the state actually changes:
+# logging every run buries real events under thousands of identical lines
+# a day, which is exactly how a broken automation went unnoticed here.
+# Deliberately has no concurrency lock: the find-before-get
 # guard already makes overlapping runs harmless, and a boolean lock with
 # no expiry is worse than the race it prevents - if the run holding it
 # dies, the lock stays set and the failover is silently disabled forever.
@@ -191,12 +194,16 @@ add name=CheckWireGuard owner=admin dont-require-permissions=no \
         :local pingResult [/ping $routeGW count=3];
         :local routeId [/ip route find where gateway=$routeGW];
         :if ([:len $routeId] > 0) do={
-            :if ($pingResult > 0) do={
-                /ip route set $routeId distance=$vpnConnectedDistance;
-                :log info "VPN connected. Route updated with distance $vpnConnectedDistance";
-            } else={
-                /ip route set $routeId distance=$vpnDisconnectedDistance;
-                :log info "VPN disconnected. Route updated with distance $vpnDisconnectedDistance";
+            :local want $vpnDisconnectedDistance;
+            :if ($pingResult > 0) do={ :set want $vpnConnectedDistance };
+            :local cur [/ip route get ($routeId->0) distance];
+            :if ($cur != $want) do={
+                /ip route set $routeId distance=$want;
+                :if ($want = $vpnConnectedDistance) do={
+                    :log info "CheckWireGuard: tunnel up, default route via VPN";
+                } else={
+                    :log warning "CheckWireGuard: tunnel DOWN, falling back to local ISP";
+                }
             }
         } else={
             :log warning "CheckWireGuard: no route found with gateway $routeGW";
