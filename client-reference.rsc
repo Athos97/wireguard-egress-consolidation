@@ -5,9 +5,11 @@
 # and reach the internet through the WireGuard tunnel to the server, so
 # the streaming service sees them coming from the exit site's IP.
 #
-# The uplink is referenced through an interface list called WAN, so
-# switching between a wired and a wireless uplink is a two-line change
-# instead of a rewrite. See "ALTERNATIVE: UPLINK OVER WIFI" at the end.
+# A client site has no input firewall (see below), so there is nothing
+# here that needs an interface list to abstract the uplink. Exactly two
+# places name it: the DHCP client, and the wanIf variable inside the
+# CheckWanLink script. Switching from a wired to a wireless uplink means
+# changing those two - see "ALTERNATIVE: UPLINK OVER WIFI" at the end.
 #
 # Replace every <PLACEHOLDER> with a real value before importing.
 # Never reuse keys or passwords from another router - every site needs
@@ -19,12 +21,6 @@
 # ============================================================
 
 # ---- Uplink definition (wired by default; see alternative at the end) ----
-/interface list
-add name=WAN
-
-/interface list member
-add interface=ether1 list=WAN
-
 /ip dhcp-client
 add default-route-distance=2 interface=ether1
 
@@ -284,10 +280,6 @@ add name=CheckWanLink owner=admin dont-require-permissions=no \
 #   /interface bridge port
 #   remove [find interface=wlan1]
 #   add bridge=bridge interface=ether1 internal-path-cost=10 path-cost=10
-#
-#   /interface list member
-#   remove [find interface=ether1]
-#   add interface=wlan1 list=WAN
 #
 #   /ip dhcp-client
 #   remove [find interface=ether1]
