@@ -118,6 +118,12 @@ add disabled=no distance=1 dst-address=0.0.0.0/0 gateway=172.16.0.1 \
     pref-src="" routing-table=main scope=30 suppress-hw-offload=no \
     target-scope=10
 
+/tool bandwidth-server
+set enabled=no
+# Disabled: unused, and it has caused real damage here. A failed UDP test
+# left the btest process burning CPU on hardware with none to spare, and
+# the tool itself crashed two routers with out-of-memory reboots.
+
 /system clock
 set time-zone-name=<YOUR_TIMEZONE>
 

@@ -108,6 +108,12 @@ set ftp disabled=yes
 set api disabled=yes
 set api-ssl disabled=yes
 
+/tool bandwidth-server
+set enabled=no
+# Disabled: unused, and it has caused real damage here. A failed UDP test
+# left the btest process burning CPU on hardware with none to spare, and
+# the tool itself crashed two routers with out-of-memory reboots.
+
 /system clock
 set time-zone-name=<YOUR_TIMEZONE>
 
